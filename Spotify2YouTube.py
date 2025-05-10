@@ -44,6 +44,12 @@ class PlaylistViewer(QWidget):
         self.export_button.clicked.connect(self.export_to_ytmusic)
         self.layout.addWidget(self.export_button)
 
+        # Button to export loaded tracks to an existing YouTube Playlist
+        self.merge_button = QPushButton("Merge into Existing YT Playlist", self)
+        self.merge_button.clicked.connect(self.merge_to_ytmusic)
+        self.layout.addWidget(self.merge_button)
+
+
         # Progress bar to show export progress
         self.progress = QProgressBar(self)
         self.progress.setValue(0)
@@ -130,6 +136,71 @@ class PlaylistViewer(QWidget):
             QMessageBox.critical(self, "Error", f"Failed to export playlist:\n{e}")
         finally:
             self.progress.setValue(0)  # Optionally reset progress bar after completion
+
+    def merge_to_ytmusic(self):
+        if not self.track_list:
+            QMessageBox.warning(self, "Error", "No tracks loaded to merge.")
+            return
+
+        try:
+            # Get user's playlists
+            playlists = self.ytmusic.get_library_playlists(limit=100)
+            if not playlists:
+                QMessageBox.information(self, "Info", "No YouTube Music playlists found.")
+                return
+
+            # Ask user to pick one
+            playlist_titles = [pl['title'] for pl in playlists]
+            selected, ok = QInputDialog.getItem(self, "Select Playlist", "Choose a YT Music playlist:", playlist_titles, 0, False)
+            if not ok or not selected:
+                return
+
+            # Get the selected playlist ID
+            playlist = next(pl for pl in playlists if pl['title'] == selected)
+            playlist_id = playlist['playlistId']
+
+            # Fetch existing tracks in that playlist
+            existing_tracks = self.ytmusic.get_playlist(playlist_id, limit=1000)['tracks']
+
+            # Normalize helper
+            def normalize(text):
+                return text.strip().lower()
+
+            # Build set of "name - artist" keys from existing playlist
+            existing_track_keys = set()
+            for track in existing_tracks:
+                title = normalize(track.get('title', ''))
+                artist = normalize(track['artists'][0]['name']) if track.get('artists') else ''
+                existing_track_keys.add(f"{title} - {artist}")
+
+            # Begin merging
+            added = 0
+            self.progress.setMaximum(len(self.track_list))
+            self.progress.setValue(0)
+
+            for index, track in enumerate(self.track_list, start=1):
+                query = f"{track['name']} {track['artist']}"
+                search_results = self.ytmusic.search(query, filter="songs")
+                if search_results:
+                    yt_track = search_results[0]
+                    video_id = yt_track.get('videoId')
+                    yt_title = normalize(yt_track.get('title', ''))
+                    yt_artist = normalize(yt_track['artists'][0]['name']) if yt_track.get('artists') else ''
+                    key = f"{yt_title} - {yt_artist}"
+
+                    if video_id and key not in existing_track_keys:
+                        self.ytmusic.add_playlist_items(playlist_id, [video_id])
+                        added += 1
+                        existing_track_keys.add(key)
+
+                self.progress.setValue(index)
+
+            QMessageBox.information(self, "Success", f"Merged into playlist '{selected}'.\n{added} new songs added.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to merge playlist:\n{e}")
+        finally:
+            self.progress.setValue(0)
+
 
 if __name__ == "__main__":
     try:
